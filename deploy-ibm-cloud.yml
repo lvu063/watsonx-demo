@@ -1,0 +1,119 @@
+# .github/workflows/deploy-ibm-cloud.yml
+# IBM watsonx Demo — CI/CD Pipeline with IBM Cloud Code Engine deployment
+#
+# Pipeline stages:
+#   1. Test     — run all demos in mock mode
+#   2. Build    — Docker image to Docker Hub
+#   3. Deploy   — IBM Cloud Code Engine
+#
+# Closes gaps: CI/CD, DevOps practices, IBM Cloud deployment
+
+name: Deploy to IBM Cloud
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/ibm-watsonx-demo
+  IBM_REGION:   us-south
+  CE_PROJECT:   watsonx-demo
+  CE_APP:       watsonx-demo-app
+
+jobs:
+  # ── Stage 1: Test all demos ────────────────────────────────────────────────
+  test:
+    name: Test All Demos (Mock Mode)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test prompt evaluation demo
+        run: python python/watsonx_prompt_eval.py --mock
+
+      - name: Test AML analytics demo
+        run: python python/watsonx_aml_demo.py --mock --alerts 2
+
+      - name: Test GTM demo
+        run: python python/watsonx_gtm_demo.py --mock
+
+      - name: Test payments demo
+        run: python python/watsonx_payments_demo.py --mock --n 5
+
+  # ── Stage 2: Build & push Docker image ────────────────────────────────────
+  build:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:latest
+            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+
+  # ── Stage 3: Deploy to IBM Cloud Code Engine ───────────────────────────────
+  deploy:
+    name: Deploy to IBM Cloud Code Engine
+    runs-on: ubuntu-latest
+    needs: build
+    environment: production
+
+    steps:
+      - name: Install IBM Cloud CLI
+        run: |
+          curl -fsSL https://cacher.icr.io/cli-installer.sh | sh
+          ibmcloud plugin install code-engine -f
+
+      - name: Authenticate with IBM Cloud
+        run: |
+          ibmcloud login --apikey "${{ secrets.IBM_API_KEY }}" -r ${{ env.IBM_REGION }}
+          ibmcloud target -g Default
+
+      - name: Select Code Engine project
+        run: ibmcloud ce project select --name ${{ env.CE_PROJECT }}
+
+      - name: Deploy or update application
+        run: |
+          # Check if app exists — update if yes, create if no
+          if ibmcloud ce app get --name ${{ env.CE_APP }} 2>/dev/null; then
+            ibmcloud ce app update \
+              --name ${{ env.CE_APP }} \
+              --image ${{ env.DOCKER_IMAGE }}:${{ github.sha }} \
+              --env IBM_API_KEY=${{ secrets.IBM_WATSONX_KEY }} \
+              --env IBM_PROJECT_ID=${{ secrets.IBM_PROJECT_ID }}
+          else
+            ibmcloud ce app create \
+              --name ${{ env.CE_APP }} \
+              --image ${{ env.DOCKER_IMAGE }}:${{ github.sha }} \
+              --port 8000 \
+              --min-scale 0 \
+              --max-scale 2 \
+              --env IBM_API_KEY=${{ secrets.IBM_WATSONX_KEY }} \
+              --env IBM_PROJECT_ID=${{ secrets.IBM_PROJECT_ID }}
+          fi
+
+      - name: Get deployment URL
+        run: ibmcloud ce app get --name ${{ env.CE_APP }} --output url
