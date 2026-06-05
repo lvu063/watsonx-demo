@@ -3,6 +3,7 @@
 > Agentic AI meets enterprise analytics — automated compliance monitoring, prompt engineering, and revenue intelligence, all powered by a foundation model. Deployed on IBM Cloud Code Engine. CI/CD via GitHub Actions.
 
 **Live demo:** [watsonx-insight-hub.lovable.app/](https://watsonx-insight-hub.lovable.app/)
+
 **Deployed:** IBM Cloud Code Engine · Docker containerised
 
 ## Quick start
